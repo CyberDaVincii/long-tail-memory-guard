@@ -12,24 +12,33 @@ important memories are the "long tail."
 
 This program answers questions about Jordan, a made-up person, by searching a
 small memory store with fixed IF-THEN rules. The rules make sure rare,
-important memories are always checked first.
+important memories are always checked first, and a limit on that protected
+lane makes sure it can never fill the whole answer.
 
 Run it with:  python long_tail_memory_guard.py
+Run the six test questions:  python long_tail_memory_guard.py --demo
+Pin the date used to expire guesses:  python long_tail_memory_guard.py --demo --today 2026-10-06
 """
 
+import argparse
 import re
 import sys
 from datetime import date
 
 # Today's date, used to decide whether an old guess has expired (Rule 5).
+# The --today option replaces it, so a test run gives the same output on any day.
 TODAY = date.today()
 
 # Memory types that are always checked first, no matter how old they are or
 # how few times they came up (Rule 4).
 PROTECTED_TYPES = ["correction", "boundary", "promise"]
 
+# The most protected memories shown for one question (Rule 4). A protected
+# lane with no limit can fill the whole answer, so it is capped and the
+# program says how many it left out.
+MAX_PROTECTED = 3
+
 # The most regular (non-protected) memories shown for one question (Rule 6).
-# Protected memories are never cut by this limit.
 MAX_REGULAR = 3
 
 # Rule 1: each topic has a list of trigger words. A question is about a topic
@@ -46,6 +55,8 @@ TOPIC_WORDS = {
                "submit", "submission"],
     "family": ["family", "daughter", "birthday", "trip", "visit", "vacation",
                "promise", "promised"],
+    "travel": ["travel", "travels", "traveling", "travelling", "flight",
+               "flights", "fly", "flying", "airport", "hotel", "luggage"],
 }
 
 # Used by Rule 7 to spot a memory that names a specific date or day.
@@ -120,6 +131,28 @@ MEMORIES = [
     {"id": 15, "type": "note", "said_by": "person",
      "text": "Jordan asked for an easy dinner recipe.",
      "date": date(2026, 9, 20), "mentions": 2, "topics": ["food"]},
+    # Travel: four protected memories, more than the protected lane holds (Rule 4).
+    {"id": 16, "type": "correction", "said_by": "person",
+     "text": "Correction: I fly out of the regional airport, not the city airport. Please never book the city airport.",
+     "date": date(2026, 2, 10), "mentions": 1, "topics": ["travel"]},
+    {"id": 17, "type": "boundary", "said_by": "person",
+     "text": "Never book me on a flight before 7 a.m.",
+     "date": date(2025, 4, 18), "mentions": 1, "topics": ["travel"]},
+    {"id": 18, "type": "boundary", "said_by": "person",
+     "text": "Always book an aisle seat. A middle seat on a long flight hurts my back.",
+     "date": date(2024, 9, 3), "mentions": 1, "topics": ["travel"]},
+    {"id": 19, "type": "promise", "said_by": "person",
+     "text": "I promised my sister I would text her when I land after every flight.",
+     "date": date(2026, 1, 15), "mentions": 1, "topics": ["travel"]},
+    {"id": 20, "type": "note", "said_by": "person",
+     "text": "Jordan asked about flights to Denver.",
+     "date": date(2026, 10, 2), "mentions": 7, "topics": ["travel"]},
+    {"id": 21, "type": "note", "said_by": "person",
+     "text": "Jordan compared hotel prices near the conference.",
+     "date": date(2026, 10, 5), "mentions": 4, "topics": ["travel"]},
+    {"id": 22, "type": "note", "said_by": "person",
+     "text": "Jordan wondered about luggage fees.",
+     "date": date(2026, 9, 29), "mentions": 3, "topics": ["travel"]},
 ]
 
 
@@ -231,13 +264,18 @@ def guard_lookup(topics):
             # Rule 6: everything else competes for the regular slots
             regular.append(memory)
 
-    # Protected memories: corrections, then boundaries, then promises, oldest first.
-    protected.sort(key=lambda m: (PROTECTED_TYPES.index(m["type"]), m["date"]))
+    # Rule 4: rank the protected lane by most shared topics, then by type
+    # (corrections, boundaries, promises), then newest first.
+    protected.sort(key=lambda m: (-shared_topics(m, topics),
+                                  PROTECTED_TYPES.index(m["type"]),
+                                  -m["date"].toordinal()))
     # Regular memories: most shared topics first, then newest first.
     regular.sort(key=lambda m: (shared_topics(m, topics), m["date"]), reverse=True)
 
     return {
-        "protected": protected,
+        "protected": protected[:MAX_PROTECTED],
+        "protected_all": protected,  # every protected memory, used for warnings
+        "protected_not_shown": max(0, len(protected) - MAX_PROTECTED),
         "regular": regular[:MAX_REGULAR],
         "not_shown": max(0, len(regular) - MAX_REGULAR),
         "replaced": replaced,
@@ -277,6 +315,10 @@ def answer(question):
         print("\nChecked first (rare but important):")
         for memory in result["protected"]:
             print("  " + describe(memory))
+        if result["protected_not_shown"]:
+            left_out = count_words(result["protected_not_shown"], "more protected memory",
+                                   "more protected memories")
+            print(f"  ({left_out} not shown. Type 'list' to see every memory.)")
 
     if result["regular"]:
         print("\nOther memories:")
@@ -285,7 +327,9 @@ def answer(question):
             flag = date_flag(memory)
             if flag:
                 print("    " + flag)
-            warning = conflict_warning(memory, result["protected"])
+            # Rule 8: warn against every protected memory, shown or not, so
+            # the display limit never switches a safety check off.
+            warning = conflict_warning(memory, result["protected_all"])
             if warning:
                 print("    " + warning)
         if result["not_shown"]:
@@ -307,7 +351,7 @@ def answer(question):
     print("\nFor comparison, a usual lookup (most mentioned, then newest, top 3) shows:")
     for memory in usual:
         print(f'  - "{memory["text"]}"')
-    missed = [m for m in result["protected"] if m not in usual]
+    missed = [m for m in result["protected_all"] if m not in usual]
     stale = [m for m in usual if m["id"] in result["replaced_by"]]
     if missed:
         print(f"  It misses {count_words(len(missed), 'protected memory', 'protected memories')}.")
@@ -322,8 +366,45 @@ def list_memories():
         print(f"  {memory['id']:>2}. " + describe(memory))
 
 
+# The six test questions from the README, in the same order.
+DEMO_QUESTIONS = [
+    "Can you suggest a snack for Jordan?",           # Test 1: correction vs. chatter
+    "When should I schedule the team meeting?",      # Test 2: boundary vs. recent plans
+    "When is Jordan's thesis due?",                  # Test 3: correction vs. old fact and guesses
+    "What is Jordan's favorite color?",              # Test 4: no memory
+    "What can Jordan munch on after the gym?",       # Test 5: a word the rules don't know
+    "What should I know before Jordan travels?",     # Test 6: more protected memories than fit
+]
+
+
+def run_demo():
+    """Run every test question without typing, so the README results can be rerun."""
+    print(f"Long-Tail Memory Guard demo (guesses are checked against {TODAY})")
+    for question in DEMO_QUESTIONS:
+        print("\nYour question: " + question)
+        answer(question)
+
+
 def main():
-    """Ask questions in a loop until the user types quit."""
+    """Run the demo, or ask questions in a loop until the user types quit."""
+    global TODAY
+    parser = argparse.ArgumentParser(description="Long-Tail Memory Guard, a rule-based memory lookup.")
+    parser.add_argument("--demo", action="store_true",
+                        help="run the six README test questions and exit")
+    parser.add_argument("--today", metavar="YYYY-MM-DD",
+                        help="check guess review dates against this date instead of today's")
+    args = parser.parse_args()
+
+    if args.today:
+        try:
+            TODAY = date.fromisoformat(args.today)
+        except ValueError:
+            parser.error("--today must look like 2026-10-06")
+
+    if args.demo:
+        run_demo()
+        return
+
     print("Long-Tail Memory Guard")
     print("Ask a question about Jordan. Type 'list' to see every memory, or 'quit' to stop.")
     while True:

@@ -10,7 +10,14 @@ Most memory lookups favor what is recent or what comes up often. That pushes rar
 python long_tail_memory_guard.py
 ```
 
-It needs Python 3.8 or newer and no extra packages. `requirements.txt` confirms there is nothing to install. Type a question about Jordan, `list` to see all 15 memories, or `quit` to stop.
+It needs Python 3.8 or newer and no extra packages. `requirements.txt` confirms there is nothing to install. Type a question about Jordan, `list` to see all 22 memories, or `quit` to stop.
+
+To rerun the six test questions from Part 3 without typing, use the demo option. The second option pins the date that guesses are checked against, so the output is the same on any day:
+
+```
+python long_tail_memory_guard.py --demo
+python long_tail_memory_guard.py --demo --today 2026-10-06
+```
 
 ## Files
 
@@ -53,11 +60,11 @@ The rules run in this order for every question. The numbers match the comments i
 1. **Topic match.** IF a word in the question appears in a topic's trigger list (for example "snack" for food, or "meeting" for schedule), THEN the question is about that topic. A memory matches IF it belongs to at least one of the question's topics.
 2. **No match.** IF the question matches no topic, or no memory matches, THEN answer "I don't have a memory about that" and suggest asking the person, instead of guessing.
 3. **Replaced memories.** IF a later correction lists a memory as replaced, THEN do not present it as current. Show it only under "Replaced by a later correction."
-4. **Protected lane.** IF a matching memory is a correction, boundary, or promise, THEN show it first, no matter how old it is or how few times it came up. Protected memories are never cut by the display limit.
+4. **Protected lane.** IF a matching memory is a correction, boundary, or promise, THEN show it first, no matter how old it is or how few times it came up. The lane holds at most three memories, so it can never fill the whole answer. Inside the lane, memories rank by how many of the question's topics they share, then by type (corrections, boundaries, promises), then newest first. IF any are left out, THEN say how many.
 5. **Expired guesses.** IF a memory is the assistant's guess AND its review date has passed, THEN leave it out and say that it expired.
 6. **Regular memories.** ELSE rank the memory by how many topics it shares with the question, then newest first, and show at most three.
 7. **Labels and unverified dates.** IF the assistant inferred a memory instead of the person saying it, THEN label it UNCONFIRMED GUESS, never a fact. IF that guess names a date and has no source, THEN flag the date as unverified.
-8. **Conflict warning.** IF a regular memory contains a word that a protected memory watches for (like "trail mix" for a peanut allergy, or "Sunday" for a no-Sunday-mornings boundary), THEN attach a warning that points back to the protected memory.
+8. **Conflict warning.** IF a regular memory contains a word that a protected memory watches for (like "trail mix" for a peanut allergy, or "Sunday" for a no-Sunday-mornings boundary), THEN attach a warning that points back to the protected memory. The warning checks every protected memory, including any the display limit left out.
 9. **Comparison.** For testing, also show what a usual lookup returns (most mentioned, then newest, top three, with no protected lane), and say what it missed.
 
 Pseudocode:
@@ -72,7 +79,8 @@ for each memory that shares a topic with the question:
 if nothing matched:
     say "I don't have a memory about that"
 else:
-    show protected first, then the top 3 regular, then expired and replaced
+    show the top 3 protected first, and say how many were left out
+    then the top 3 regular, then expired and replaced
     show what a usual lookup would have returned
 ```
 
@@ -80,7 +88,7 @@ else:
 
 ## Part 3: Test Results
 
-These five runs are copied from the program's output on October 6, 2026. Rule 5 compares review dates with today's date, so which guesses count as expired depends on the day you run it. The first three are the main tests. The last two show how the system handles a question it can't answer.
+These six runs are the program's output from `python long_tail_memory_guard.py --demo --today 2026-10-06`. Rule 5 compares review dates with a date, and `--today` pins it so the output is the same on any day. The first three are the main tests. Tests 4 and 5 show how the system handles a question it can't answer. Test 6 shows the limit on the protected lane.
 
 ### Test 1: a rare correction vs. frequent chatter
 
@@ -181,12 +189,38 @@ I don't have a memory about that. I'd ask Jordan instead of guessing.
 
 "Munch" is not in the food word list, so the guard finds nothing, even though Jordan has snack memories. A rule-based system only knows the words it was given.
 
+### Test 6: more protected memories than the lane holds
+
+```
+Your question: What should I know before Jordan travels?
+Topics: travel
+
+Checked first (rare but important):
+  [CORRECTION, came up once, 2026-02-10] "Correction: I fly out of the regional airport, not the city airport. Please never book the city airport."
+  [BOUNDARY, came up once, 2025-04-18] "Never book me on a flight before 7 a.m."
+  [BOUNDARY, came up once, 2024-09-03] "Always book an aisle seat. A middle seat on a long flight hurts my back."
+  (1 more protected memory not shown. Type 'list' to see every memory.)
+
+Other memories:
+  [NOTE, came up 4 times, 2026-10-05] "Jordan compared hotel prices near the conference."
+  [NOTE, came up 7 times, 2026-10-02] "Jordan asked about flights to Denver."
+  [NOTE, came up 3 times, 2026-09-29] "Jordan wondered about luggage fees."
+
+For comparison, a usual lookup (most mentioned, then newest, top 3) shows:
+  - "Jordan asked about flights to Denver."
+  - "Jordan compared hotel prices near the conference."
+  - "Jordan wondered about luggage fees."
+  It misses 4 protected memories.
+```
+
+Jordan has four protected travel memories. The guard shows the top three and says one was left out, so the answer stays the size of a normal answer. A usual lookup misses all four. The cost is visible: the lane ranks only by topic and type, so the promise to text a sister after landing is the one that gets dropped, and a person can still see it with `list`.
+
 ---
 
 ## Part 4: Reflection
 
-The guard answers a question about a person by matching the question's words to topics, then sorting every matching memory with fixed rules. Corrections, boundaries, and promises go into a protected lane that is always checked first and never cut by the display limit. A memory that a later correction replaced shows up only as replaced. The assistant's own guesses are labeled as guesses and dropped once their review date passes. Everything else competes for three regular slots by topic and date. To show what the rules change, the program also prints what a usual lookup would return. In my tests, the usual lookup missed the peanut allergy, the Sunday boundary, and the corrected thesis date, and it put the old, wrong date first.
+The guard answers a question about a person by matching the question's words to topics, then sorting every matching memory with fixed rules. Corrections, boundaries, and promises go into a protected lane that is always checked first and capped at three, so it can't fill the answer. A memory that a later correction replaced shows up only as replaced. The assistant's own guesses are labeled as guesses and dropped once their review date passes. Everything else competes for three regular slots by topic and date. In my tests, a usual lookup missed the peanut allergy, the Sunday boundary, and the corrected thesis date, and put the old, wrong date first.
 
-Prompting the AI took a few rounds before the ideas fit my work. I asked for different ideas after the first set, and when the second set moved to general topics like chess and family history, I asked for ideas from my research on AI memory. After that, the design came together quickly. The main design question was what counts as rare but important. If everything is protected, nothing is, so the protected lane holds only three types. The clearest limit showed up in testing. The rules only understand words that were listed by hand, so "What can Jordan munch on?" found nothing even though "snack" works.
+Prompting the AI took a few rounds before the ideas fit my work. I asked for different ideas after the first set, and when the second set moved to general topics like chess and family history, I asked for ideas from my research on AI memory. After that, the design came together quickly. The main design question was what counts as rare but important. If everything is protected, nothing is, so the lane holds only three types, and a lane with no size limit can crowd out ordinary answers. My memory research found the same tradeoff: an unlimited protected lane hurt recall on everyday questions, and a small reserved slot recovered it. Test 6 shows the cap and what it left out. The clearest limit showed up in testing: the rules only understand words listed by hand, so "What can Jordan munch on?" found nothing even though "snack" works.
 
 That limit is where modern machine learning differs. A learned system uses embeddings to match meaning, so it would likely connect "munch" to snacks. But learned retrieval often ranks by similarity and recency, and that is how a correction someone made once gets buried under everyday notes. I think the strongest design uses both: learned matching to find candidate memories, and a rule-based protected lane so a person's corrections are never outranked by chatter. That is the direction my memory research is taking.
